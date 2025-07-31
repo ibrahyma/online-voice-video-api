@@ -8,7 +8,7 @@ cachetools==5.5.2
 certifi==2025.6.15
 cffi==1.17.1
 charset-normalizer==3.4.2
-click==7.1.2
+click>=8.1.7
 colorama==0.4.6
 decorator==5.2.1
 Django==4.2.23
