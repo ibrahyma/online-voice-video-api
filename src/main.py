@@ -4,15 +4,17 @@ import shutil
 import subprocess
 import traceback
 import urllib.parse
+import uuid
 import ffmpeg
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from spleeter.separator import Separator
 from starlette.responses import JSONResponse
 from yt_dlp import YoutubeDL
+from fastapi.middleware.cors import CORSMiddleware
 
+from src.models.cookie import Cookie
 
 
 def clear_directory(path):
@@ -29,27 +31,59 @@ def get_file_name(file: str):
 
 
 
-def download_source_videos(url):
+def upload_cookies(cookies: list[Cookie]):
+    filename = os.path.join(TEMP_COOKIES_FOLDER, f"cookies_{uuid.uuid4().hex}.txt")
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("# Netscape HTTP Cookie File\n")
+        f.write("# This file was generated automatically.\n")
+        f.write("# Format: domain\tflag\tpath\tsecure\texpiration\tname\tvalue\n")
+
+        for cookie in cookies:
+            domain = cookie.domain
+            flag = "TRUE" if domain.startswith(".") else "FALSE"
+            path = cookie.path
+            secure = "TRUE" if cookie.secure else "FALSE"
+            expires = str(int(cookie.expirationDate))
+            name = cookie.name
+            value = cookie.value
+
+            f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+
+    return filename
+
+
+
+def download_source_videos(url: str, cookies: list[Cookie]):
+    cookie_filepath = upload_cookies(cookies)
     ydl_opts = {
-        'no_warnings': True,
+        'cookiefile': cookie_filepath,
+        'force_ipv4': True,
+        'user_agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) '
+            'Gecko/20100101 Firefox/141.0'
+        ),
         'noplaylist': True,
+        'no_warnings': True,
+        'quiet': False,
         'outtmpl': f'{TEMP_VIDEOS_FOLDER}/%(title)s.%(ext)s',
         'external_downloader': 'aria2c',
-        'external_downloader_args': ['-x8', '-k1M'],
-        'skip_download': False,
+        'external_downloader_args': ['-x', '8', '-k', '1M'],
+        'nocheckcertificate': True,
         'no_call_home': True,
-        'no_check_certificate': True,
-        'socket_timeout': 3,
+        'socket_timeout': 10,
         'source_address': '0.0.0.0',
-        'force_generic_extractor': False,
-        'cachedir': False,
         'prefer_ffmpeg': True,
+        'cachedir': False,
         'postprocessors': [],
+        'restrictfilenames': True
     }
 
     with YoutubeDL(ydl_opts) as ydl:
         print("Attempt to download source videos")
         ydl.download([url])
+
+    os.remove(cookie_filepath)
 
     return {"videos": os.listdir(TEMP_VIDEOS_FOLDER)}
 
@@ -112,10 +146,12 @@ def concat_video_with_audio(video_path, vocals_path):
 
 
 def reset_storage(with_output: bool = False):
+    os.makedirs(TEMP_COOKIES_FOLDER, exist_ok=True)
     os.makedirs(TEMP_VIDEOS_FOLDER, exist_ok=True)
     os.makedirs(TEMP_AUDIO_FOLDER, exist_ok=True)
     os.makedirs(TEMP_AUDIO_CONVERTED_FOLDER, exist_ok=True)
     os.makedirs(OUTPUT_VIDEOS_FOLDER, exist_ok=True)
+    clear_directory(TEMP_COOKIES_FOLDER)
     clear_directory(TEMP_VIDEOS_FOLDER)
     clear_directory(TEMP_AUDIO_FOLDER)
     clear_directory(TEMP_AUDIO_CONVERTED_FOLDER)
@@ -124,12 +160,12 @@ def reset_storage(with_output: bool = False):
 
 
 
-def _convert_callback(request: Request, url: str):
+def _convert_callback(request: Request, url: str, cookies: list[Cookie]):
     reset_storage(True)
 
     print("downloading file")
 
-    download_source_videos(url)
+    download_source_videos(url, cookies)
 
     if len(os.listdir(TEMP_VIDEOS_FOLDER)) == 0:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -183,6 +219,7 @@ def _get_video_data_callback(url):
 TEMP_VIDEOS_FOLDER = 'temp_video'
 TEMP_AUDIO_FOLDER = 'temp_audio'
 TEMP_AUDIO_CONVERTED_FOLDER = 'temp_audio_converted'
+TEMP_COOKIES_FOLDER = 'temp_cookie'
 OUTPUT_VIDEOS_FOLDER = 'output'
 
 os.makedirs(OUTPUT_VIDEOS_FOLDER, exist_ok=True)
@@ -200,16 +237,15 @@ app.add_middleware(
 )
 
 
-
 # TODO: Un nouvel appel de la même requête doit pouvoir interrompre l'appel précédent en cours et réinitialiser son état
 ## Approche à tenter : arrêter l'exécution de la fonction en cours, attendre quelques secondes, en exécuter une nouvelle
 @app.post("/convert")
-async def convert_endpoint(request: Request, url: str):
+async def convert_endpoint(request: Request, url: str, cookies: list[Cookie]):
     try:
         if url.startswith(request.base_url.__str__()):
             raise HTTPException(status_code=400, detail="Url must not be server")
         print(url, f"/endpoint called")
-        result = _convert_callback(request, url)
+        result = _convert_callback(request, url, cookies)
         print(url, "Done")
         return result
     except HTTPException as e:
@@ -220,23 +256,6 @@ async def convert_endpoint(request: Request, url: str):
 
 
 
-@app.get("/videos-data")
-async def get_videos_data_endpoint(request: Request, url: str):
-    try:
-        if url.startswith(request.base_url.__str__()):
-            raise HTTPException(status_code=400, detail="Url must not be server")
-        print(url, f"/endpoint called")
-        result = _get_video_data_callback(url)
-        print(url, "Done")
-        return result
-    except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"data": [], "error": str(e)})
-    except Exception as e:
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"data": [], "error": str(e)})
-
-
-
-if __name__ == 'main':
-    print("starting server...")
+if __name__ == 'src.main':
+    print("Starting server...")
     reset_storage(True)
