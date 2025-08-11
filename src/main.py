@@ -38,17 +38,27 @@ def upload_cookies(cookies: list[Cookie]):
         f.write("# Netscape HTTP Cookie File\n")
         f.write("# This file was generated automatically.\n")
         f.write("# Format: domain\tflag\tpath\tsecure\texpiration\tname\tvalue\n")
+        f.write("")
 
         for cookie in cookies:
             domain = cookie.domain
-            flag = "TRUE" if domain.startswith(".") else "FALSE"
-            path = cookie.path
-            secure = "TRUE" if cookie.secure else "FALSE"
-            expires = str(int(cookie.expirationDate))
-            name = cookie.name
-            value = cookie.value
 
-            f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+            include_subdomains = "FALSE" if cookie.hostOnly else "TRUE"
+            if domain.startswith("."):
+                include_subdomains = "TRUE"
+
+            secure = "TRUE" if cookie.secure else "FALSE"
+            expiry = 0 if cookie.session else cookie.expirationDate
+
+            f.write("\t".join([
+                domain,
+                include_subdomains,
+                cookie.path,
+                secure,
+                str(expiry),
+                cookie.name,
+                cookie.value
+            ]) + "\n")
 
     return filename
 
@@ -236,9 +246,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-
-# TODO: Un nouvel appel de la même requête doit pouvoir interrompre l'appel précédent en cours et réinitialiser son état
-## Approche à tenter : arrêter l'exécution de la fonction en cours, attendre quelques secondes, en exécuter une nouvelle
 @app.post("/convert")
 async def convert_endpoint(request: Request, url: str, cookies: list[Cookie]):
     try:
@@ -254,8 +261,5 @@ async def convert_endpoint(request: Request, url: str, cookies: list[Cookie]):
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"videos": [], "error": str(e)})
 
-
-
 if __name__ == 'src.main':
-    print("Starting server...")
     reset_storage(True)
