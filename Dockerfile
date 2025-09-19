@@ -10,4 +10,4 @@ COPY . .
 
 ENV PORT=7860
 
-CMD ["python", "src/models/main.py"]
+CMD ["python", "src/main.py"]
